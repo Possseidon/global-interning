@@ -8,50 +8,50 @@ use crate::{AnyInterner, Intern};
 ///
 /// It is also implemented for most `?Sized` [`std`] types such as [`str`] and slices.
 ///
-/// A blanket implementation over `Arc<T>: From<&T>` would work for most `?Sized` types but not for
+/// A blanket implementation over `Box<T>: From<&T>` would work for most `?Sized` types but not for
 /// sized ones.
 #[diagnostic::on_unimplemented(
     message = "unable to intern `{Self}` from a reference",
     note = "`Sized` types must implement `Clone` to be internable from a reference",
-    note = "use an owned value via `Interned::insert` if `{Self}` cannot be `Clone`",
+    note = "use an owned value via `Interned::from_owned` if `{Self}` cannot be `Clone`",
     note = "`?Sized` types must implement `InternRef` manually"
 )]
 pub trait InternRef: Intern {
-    fn intern_ref(&self) -> Arc<Self>;
+    fn intern_ref(&self) -> Box<Self>;
 }
 
 impl<T: Intern + Clone> InternRef for T {
-    fn intern_ref(&self) -> Arc<Self> {
-        Arc::new(self.clone())
+    fn intern_ref(&self) -> Box<Self> {
+        Box::new(self.clone())
     }
 }
 
 impl<T: Intern + Clone> InternRef for [T] {
-    fn intern_ref(&self) -> Arc<Self> {
+    fn intern_ref(&self) -> Box<Self> {
         self.into()
     }
 }
 
 impl InternRef for str {
-    fn intern_ref(&self) -> Arc<Self> {
+    fn intern_ref(&self) -> Box<Self> {
         self.into()
     }
 }
 
 impl InternRef for std::path::Path {
-    fn intern_ref(&self) -> Arc<Self> {
+    fn intern_ref(&self) -> Box<Self> {
         self.into()
     }
 }
 
 impl InternRef for std::ffi::OsStr {
-    fn intern_ref(&self) -> Arc<Self> {
+    fn intern_ref(&self) -> Box<Self> {
         self.into()
     }
 }
 
 impl InternRef for std::ffi::CStr {
-    fn intern_ref(&self) -> Arc<Self> {
+    fn intern_ref(&self) -> Box<Self> {
         self.into()
     }
 }

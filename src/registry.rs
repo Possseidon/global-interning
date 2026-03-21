@@ -297,12 +297,14 @@ pub trait AnyInterner: Any + Send + Sync {
     /// Whether this interner stores any values, including ones that are no longer used.
     fn is_empty(&self) -> bool;
 
-    /// The total number of [`Interned<T>`](crate::Interned) that are duplicates.
+    /// The total number of [`Interned<T>`] that are duplicates.
     ///
-    /// A low sum may indicate that interning hurts more than it helps.
+    /// A low number may indicate that interning hurts more than it helps.
     ///
-    /// This should only be seen as an estimate since duplicate [`Arc`]s can be cloned and dropped
-    /// at any time from other threads.
+    /// This should only be seen as an estimate since duplicate [`Interned<T>`]s can be cloned and
+    /// dropped at any time from other threads.
+    ///
+    /// [`Interned<T>`]: crate::Interned
     fn sum_duplicates(&self) -> usize;
 
     /// Counts the number of unused values which could be removed via [`Self::cleanup`].
