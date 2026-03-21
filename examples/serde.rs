@@ -22,7 +22,7 @@ fn main() {
                     {
                         "name": "Bob"
                     }
-                ],
+                ]
             },
             {
                 "name": "Alice",
@@ -33,8 +33,8 @@ fn main() {
                     {
                         "name": "Bob"
                     }
-                ],
-            },
+                ]
+            }
         ]
     }))
     .unwrap();
