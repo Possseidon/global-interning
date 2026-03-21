@@ -78,7 +78,7 @@ impl<T: ?Sized + fmt::Display> fmt::Display for Interned<T> {
     }
 }
 
-impl<T: ?Sized + fmt::Pointer> fmt::Pointer for Interned<T> {
+impl<T: ?Sized> fmt::Pointer for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
