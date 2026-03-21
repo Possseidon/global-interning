@@ -107,10 +107,13 @@ impl<T: ?Sized + Intern> AnyInterner for Interner<T> {
         self.values.iter().any(Self::is_unused)
     }
 
-    fn cleanup(&mut self) {
+    fn cleanup(&mut self) -> usize {
+        let count = self.len();
         // having exclusive access via &mut self ensure that if this is the only reference then
         // nobody else could create a new reference by cloning the Arc during this function
         self.values.retain(|value| !Self::is_unused(value));
+        // the above also means len can never increase so the following cannot overflow
+        count - self.len()
     }
 
     fn capacity(&self) -> usize {

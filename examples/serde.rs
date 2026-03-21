@@ -10,7 +10,6 @@ struct Person {
 }
 
 fn main() {
-    // deserializing into an interned structure
     let person: Interned<Person> = serde_json::from_value(json!({
         "name": "Alice",
         "parents": [
@@ -50,13 +49,17 @@ fn main() {
     println!("{output}");
 
     println!();
-    println!("Interners:");
     INTERNERS.for_each_mut(|interner| {
+        println!("Interned<{}>", interner.name());
+        println!("  {} distinct value(s) interned", interner.len(),);
         println!(
-            "- {}: count {}, total duplicates {}",
-            interner.name(),
-            interner.len(),
+            "  {} duplicated value(s) avoided in total",
             interner.sum_duplicates()
         );
+        println!("  {} value(s) unused", interner.count_unused());
     });
+
+    drop(person);
+    let (total, passes) = INTERNERS.cleanup_all();
+    println!("removed {total} values using {passes} passes");
 }

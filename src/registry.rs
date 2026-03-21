@@ -2,7 +2,7 @@ use std::{
     any::{Any, TypeId},
     borrow::Cow,
     mem::replace,
-    sync::{Arc, LazyLock, RwLock},
+    sync::{Arc, LazyLock, LockResult, RwLock},
 };
 
 use crate::{Intern, Interner};
@@ -22,12 +22,14 @@ pub struct InternerRegistry {
 impl InternerRegistry {
     /// The number of interners that have been registered, including empty ones.
     pub fn len(&self) -> usize {
-        LazyLock::get(&self.interners).map_or(0, |interners| interners.read().unwrap().len())
+        LazyLock::get(&self.interners)
+            .map_or(0, |interners| interners.read().expect_unpoisoned().len())
     }
 
     /// Whether there are no interners registered at the moment.
     pub fn is_empty(&self) -> bool {
-        LazyLock::get(&self.interners).is_none_or(|interners| interners.read().unwrap().is_empty())
+        LazyLock::get(&self.interners)
+            .is_none_or(|interners| interners.read().expect_unpoisoned().is_empty())
     }
 
     /// The number of interners that are registered but currently empty.
@@ -35,9 +37,9 @@ impl InternerRegistry {
         LazyLock::get(&self.interners).map_or(0, |interners| {
             interners
                 .read()
-                .unwrap()
+                .expect_unpoisoned()
                 .values()
-                .filter(|interner| interner.read().unwrap().is_empty())
+                .filter(|interner| interner.read().expect_unpoisoned().is_empty())
                 .count()
         })
     }
@@ -47,9 +49,9 @@ impl InternerRegistry {
         LazyLock::get(&self.interners).is_some_and(|interners| {
             interners
                 .read()
-                .unwrap()
+                .expect_unpoisoned()
                 .values()
-                .any(|interner| interner.read().unwrap().is_empty())
+                .any(|interner| interner.read().expect_unpoisoned().is_empty())
         })
     }
 
@@ -78,19 +80,19 @@ impl InternerRegistry {
     ///
     /// # Locking
     ///
-    /// Any interning operation within `f` will lead to a deadlock.
+    /// Any interning operation within `f` will lead to a deadlock due to the global write-lock.
     pub fn retain_empty(&self, mut f: impl FnMut(&mut dyn AnyInterner) -> bool) {
         if let Some(interners) = LazyLock::get(&self.interners) {
-            interners.write().unwrap().retain(|_, interner| {
-                let interner = &mut **interner.get_mut().unwrap();
+            interners.write().expect_unpoisoned().retain(|_, interner| {
+                let interner = &mut **interner.get_mut().expect_unpoisoned();
                 !interner.is_empty() || f(interner)
             });
         }
     }
 
-    /// Calls `f` for all registered interners in arbitrary order.
+    /// Calls `f` for all registered interners in reverse insertion order.
     ///
-    /// Interners are iterated in the order that they were added.
+    /// This order was chosen for consistency with [`Self::for_each_mut`] which has its own reason.
     ///
     /// # Locking
     ///
@@ -99,15 +101,24 @@ impl InternerRegistry {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners
                 .read()
-                .unwrap()
+                .expect_unpoisoned()
                 .values()
-                .for_each(|interner| f(&**interner.read().unwrap()));
+                .rev()
+                .for_each(|interner| f(&**interner.read().expect_unpoisoned()));
         }
     }
 
-    /// Calls `f` for all registered interners in arbitrary order.
+    /// Calls `f` for all registered interners in reverse insertion order.
     ///
-    /// Interners are iterated in the order that they were added.
+    /// This order was chosen with [`AnyInterner::cleanup`] in mind. A nested structure of different
+    /// interned types has to clean up the outermost types first since the inner ones are
+    /// technically still referenced by the existing outer but unreferenced values.
+    ///
+    /// When such a structure is created, the inner values are usually created first. Unfortunately
+    /// this is not always the case since nested values may be optional.
+    ///
+    /// TL;DR a single [`Self::for_each_mut`] may not necessarily result in a full cleanup but
+    /// reverse order helps for the common case.
     ///
     /// # Locking
     ///
@@ -116,23 +127,76 @@ impl InternerRegistry {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners
                 .read()
-                .unwrap()
+                .expect_unpoisoned()
                 .values()
-                .for_each(|interner| f(&mut **interner.write().unwrap()));
+                .rev()
+                .for_each(|interner| f(&mut **interner.write().expect_unpoisoned()));
         }
+    }
+
+    /// Cleans up all unused values across all interners.
+    ///
+    /// Returns the total number of removed values as well as the number of passes it took to clean
+    /// everything up. Both saturate at [`usize::MAX`].
+    ///
+    /// The number of passes includes the final pass in which no more values could be cleaned up.
+    /// Returns `0` passes if no interners are registered yet.
+    ///
+    /// This intentionally does **not** fully remove interners themselves even if they end up empty.
+    /// [`Self::remove_empty`] can be called afterwards manually but remember that this will drop
+    /// capacity and cause renamed interners to lose their name.
+    ///
+    /// # Locking
+    ///
+    /// This takes a write-lock on the entire registry even though a read-lock would technically
+    /// suffice to ensure that this function is guaranteed to finish eventually. Without this
+    /// exclusivity another thread could repeatedly create new unused values faster than they
+    /// can be cleaned up.
+    pub fn cleanup_all(&self) -> (usize, usize) {
+        let Some(interners) = LazyLock::get(&self.interners) else {
+            return (0, 0);
+        };
+
+        // a read-lock would suffice but a write-lock guarantees a finite number of passes
+        let mut interners = interners.write().expect_unpoisoned();
+        if interners.is_empty() {
+            return (0, 0);
+        }
+
+        let mut total = 0_usize;
+        let mut passes = 1_usize; // need to do at least one pass
+
+        while interners
+            .values_mut()
+            .rev() // see Self::for_each_mut for why rev
+            .fold(false, |any_cleaned_up, interner| {
+                // .fold() instead of .any() to always do a full pass
+                let cleaned_up = interner.get_mut().expect_unpoisoned().cleanup();
+                total = total.saturating_add(cleaned_up);
+                any_cleaned_up || cleaned_up > 0
+            })
+        {
+            passes = passes.saturating_add(1); // need an extra pass
+        }
+
+        (total, passes)
     }
 
     /// Calls `f` with the interner for `T` if it exists and forwards its result `R`.
     ///
     /// Returns [`None`] if `T` doesn't have an interner.
+    ///
+    /// # Locking
+    ///
+    /// Any interning operation within `f` may lead to a deadlock.
     pub fn get<T: ?Sized + Intern, R>(
         &self,
         f: impl FnOnce(&dyn AnyInterner) -> Option<R>,
     ) -> Option<R> {
         if let Some(interners) = LazyLock::get(&self.interners)
-            && let Some(interner) = interners.read().unwrap().get(&TypeId::of::<T>())
+            && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&**interner.read().unwrap())
+            f(&**interner.read().expect_unpoisoned())
         } else {
             None
         }
@@ -141,14 +205,18 @@ impl InternerRegistry {
     /// Calls `f` with the interner for `T` if it exists and forwards its result `R`.
     ///
     /// Returns [`None`] if `T` doesn't have an interner.
+    ///
+    /// # Locking
+    ///
+    /// Any interning operation within `f` may lead to a deadlock.
     pub fn get_mut<T: ?Sized + Intern, R>(
         &self,
         f: impl FnOnce(&mut dyn AnyInterner) -> Option<R>,
     ) -> Option<R> {
         if let Some(interners) = LazyLock::get(&self.interners)
-            && let Some(interner) = interners.read().unwrap().get(&TypeId::of::<T>())
+            && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&mut **interner.write().unwrap())
+            f(&mut **interner.write().expect_unpoisoned())
         } else {
             None
         }
@@ -157,23 +225,27 @@ impl InternerRegistry {
     /// Calls `f` with the interner for `T` and forwards its result `R`.
     ///
     /// If necessary an empty interner for `T` is created.
+    ///
+    /// # Locking
+    ///
+    /// Any interning operation within `f` may lead to a deadlock.
     pub fn get_or_init<T: ?Sized + Intern, R>(
         &self,
         f: impl FnOnce(&mut dyn AnyInterner) -> R,
     ) -> R {
         if let Some(interners) = LazyLock::get(&self.interners)
-            && let Some(interner) = interners.read().unwrap().get(&TypeId::of::<T>())
+            && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&mut **interner.write().unwrap())
+            f(&mut **interner.write().expect_unpoisoned())
         } else {
             f(&mut **self
                 .interners
                 .write()
-                .unwrap()
+                .expect_unpoisoned()
                 .entry(TypeId::of::<T>())
                 .or_insert_with(|| RwLock::new(Box::new(Interner::<T>::default())))
                 .get_mut()
-                .unwrap())
+                .expect_unpoisoned())
         }
     }
 
@@ -245,8 +317,8 @@ pub trait AnyInterner: Any + Send + Sync {
     /// - `&self` does not guarantee this
     fn any_unused(&self) -> bool;
 
-    /// Removes up any unused values.
-    fn cleanup(&mut self);
+    /// Removes any unused values and returns the number of removed values.
+    fn cleanup(&mut self) -> usize;
 
     /// Returns the number of values that can be interned without reallocating.
     ///
@@ -290,3 +362,17 @@ macro_rules! rename_interner {
 }
 
 type RegistryMap = indexmap::IndexMap<TypeId, RwLock<Box<dyn AnyInterner>>, ahash::RandomState>;
+
+trait LockResultExt {
+    type Output;
+
+    fn expect_unpoisoned(self) -> Self::Output;
+}
+
+impl<T> LockResultExt for LockResult<T> {
+    type Output = T;
+
+    fn expect_unpoisoned(self) -> Self::Output {
+        self.expect("should not be poisoned")
+    }
+}
