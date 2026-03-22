@@ -90,10 +90,31 @@ impl<T: ?Sized + Error> Error for Interned<T> {
     }
 }
 
-impl<T: ?Sized + Intern> Default for Interned<T>
-where
-    Box<T>: Default,
-{
+impl<T: Intern + Default> Default for Interned<T> {
+    fn default() -> Self {
+        Self::from_owned(Default::default())
+    }
+}
+
+impl<T: Intern> Default for Interned<[T]> {
+    fn default() -> Self {
+        Self::from_box(Default::default())
+    }
+}
+
+impl Default for Interned<str> {
+    fn default() -> Self {
+        Self::from_box(Default::default())
+    }
+}
+
+impl Default for Interned<std::ffi::OsStr> {
+    fn default() -> Self {
+        Self::from_box(Default::default())
+    }
+}
+
+impl Default for Interned<std::ffi::CStr> {
     fn default() -> Self {
         Self::from_box(Default::default())
     }
