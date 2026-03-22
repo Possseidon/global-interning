@@ -288,18 +288,22 @@ impl<T: ?Sized + Intern> Interned<T> {
 
     /// Interns a fixed-size array `[T; N]` into an unsized slice `[T]`.
     ///
-    /// Without this function it would only be possible to intern a slice from an array by either:
+    /// [`Interned::from_owned`] cannot be used for this since it would require the given `value` to
+    /// be of type `[T]` which is not possible.
     ///
-    /// - [`Interned::from_ref`] which requires `T` to be [`Clone`] or
-    /// - [`Interned::from_box`] which requires [`Box`]ing (and unsizing) the array
+    /// [`Interned::from_ref`] and [`Interned::from_box`] both work since they introduce indirection
+    /// but the former requires `T` to be [`Clone`] and the latter requires eagerly wrapping the
+    /// array in a [`Box`].
     pub fn slice_from_array<const N: usize>(value: [T; N]) -> Interned<[T]>
     where
         T: Sized,
     {
+        // Turbofish to make 100% sure the value is interned as [T] and **not** as [T; N].
+        // Wrapping that in Interned would just unsize the already interned Arc which is wrong!
         Interned(
             INTERNERS
-                .get_value(&value)
-                .unwrap_or_else(|| INTERNERS.intern(value.into())),
+                .get_value::<[_]>(&value)
+                .unwrap_or_else(|| INTERNERS.intern::<[_]>(value.into())),
         )
     }
 }
