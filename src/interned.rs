@@ -187,7 +187,7 @@ impl<T: ?Sized + InternRef> From<&mut T> for Interned<T> {
 
 impl<T: Intern, const N: usize> From<[T; N]> for Interned<[T]> {
     fn from(value: [T; N]) -> Self {
-        Interned::slice_from_array(value)
+        Self::slice_from_array(value)
     }
 }
 
@@ -244,35 +244,33 @@ where
     }
 }
 
-impl<T: ?Sized + Intern> Interned<T> {
-    /// Interns the given `value` via [`InternRef`] or returns an already interned value.
-    ///
-    /// Prefer [`Self::from_owned`] if you have an owned value and don't need it anymore.
-    pub fn from_ref(value: &T) -> Self
-    where
-        T: InternRef,
-    {
-        Self(
-            INTERNERS
-                .get_value(value)
-                .unwrap_or_else(|| INTERNERS.intern(value.intern_ref().into())),
-        )
-    }
-
+impl<T: Intern> Interned<T> {
     /// Interns the given `value` or returns an already interned value.
     ///
     /// The given `value` is dropped if it was already interned.
-    pub fn from_owned(value: T) -> Self
-    where
-        T: Sized,
-    {
+    pub fn from_owned(value: T) -> Self {
         Self(
             INTERNERS
                 .get_value(&value)
                 .unwrap_or_else(|| INTERNERS.intern(value.into())),
         )
     }
+}
 
+impl<T: ?Sized + InternRef> Interned<T> {
+    /// Interns the given `value` via [`InternRef`] or returns an already interned value.
+    ///
+    /// Prefer [`Self::from_owned`] if you have an owned value and don't need it anymore.
+    pub fn from_ref(value: &T) -> Self {
+        Self(
+            INTERNERS
+                .get_value(value)
+                .unwrap_or_else(|| INTERNERS.intern(value.intern_ref().into())),
+        )
+    }
+}
+
+impl<T: ?Sized + Intern> Interned<T> {
     /// Interns a [`Box`]ed `value` or returns an already interned value.
     ///
     /// This is a more flexible option requiring neither [`Sized`] like [`Self::from_owned`] nor
@@ -285,7 +283,9 @@ impl<T: ?Sized + Intern> Interned<T> {
                 .unwrap_or_else(|| INTERNERS.intern(value.into())),
         )
     }
+}
 
+impl<T: Intern> Interned<[T]> {
     /// Interns a fixed-size array `[T; N]` into an unsized slice `[T]`.
     ///
     /// [`Interned::from_owned`] cannot be used for this since it would require the given `value` to
@@ -294,13 +294,10 @@ impl<T: ?Sized + Intern> Interned<T> {
     /// [`Interned::from_ref`] and [`Interned::from_box`] both work since they introduce indirection
     /// but the former requires `T` to be [`Clone`] and the latter requires eagerly wrapping the
     /// array in a [`Box`].
-    pub fn slice_from_array<const N: usize>(value: [T; N]) -> Interned<[T]>
-    where
-        T: Sized,
-    {
+    pub fn slice_from_array<const N: usize>(value: [T; N]) -> Self {
         // Turbofish to make 100% sure the value is interned as [T] and **not** as [T; N].
         // Wrapping that in Interned would just unsize the already interned Arc which is wrong!
-        Interned(
+        Self(
             INTERNERS
                 .get_value::<[_]>(&value)
                 .unwrap_or_else(|| INTERNERS.intern::<[_]>(value.into())),
