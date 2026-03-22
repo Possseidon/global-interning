@@ -235,28 +235,6 @@ impl<'a, T: Intern + Clone, const N: usize> TryFrom<&'a mut [T]> for Interned<[T
     }
 }
 
-/// Unlike [`Arc`] this [`Clone`]s all `T`s instead of cloning the [`Arc`].
-///
-/// The current design forbids [`Interned`] of different `T` to share the same [`Arc`].
-impl<T: Intern + Clone, const N: usize> From<Interned<[T; N]>> for Interned<[T]> {
-    fn from(value: Interned<[T; N]>) -> Self {
-        Self::from_ref(&value[..])
-    }
-}
-
-/// Unlike [`Arc`] this [`Clone`]s all `T`s instead of cloning the [`Arc`].
-///
-/// The current design forbids [`Interned`] of different `T` to share the same [`Arc`].
-impl<T: Intern + Clone, const N: usize> TryFrom<Interned<[T]>> for Interned<[T; N]> {
-    type Error = Interned<[T]>;
-
-    fn try_from(value: Interned<[T]>) -> Result<Self, Self::Error> {
-        Arc::try_from(value.0)
-            .map(|value| Self::from_ref(&value))
-            .map_err(Interned)
-    }
-}
-
 impl<T: ?Sized + Intern, A> FromIterator<A> for Interned<T>
 where
     Box<T>: FromIterator<A>,
