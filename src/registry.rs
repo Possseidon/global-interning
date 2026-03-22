@@ -84,7 +84,7 @@ impl InternerRegistry {
     pub fn retain_empty(&self, mut f: impl FnMut(&mut dyn AnyInterner) -> bool) {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners.write().expect_unpoisoned().retain(|_, interner| {
-                let interner = &mut **interner.get_mut().expect_unpoisoned();
+                let interner = interner.get_mut().expect_unpoisoned();
                 !interner.is_empty() || f(interner)
             });
         }
@@ -104,7 +104,7 @@ impl InternerRegistry {
                 .expect_unpoisoned()
                 .values()
                 .rev()
-                .for_each(|interner| f(&**interner.read().expect_unpoisoned()));
+                .for_each(|interner| f(&*interner.read().expect_unpoisoned()));
         }
     }
 
@@ -130,7 +130,7 @@ impl InternerRegistry {
                 .expect_unpoisoned()
                 .values()
                 .rev()
-                .for_each(|interner| f(&mut **interner.write().expect_unpoisoned()));
+                .for_each(|interner| f(&mut *interner.write().expect_unpoisoned()));
         }
     }
 
@@ -196,7 +196,7 @@ impl InternerRegistry {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&**interner.read().expect_unpoisoned())
+            f(&*interner.read().expect_unpoisoned())
         } else {
             None
         }
@@ -216,7 +216,7 @@ impl InternerRegistry {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&mut **interner.write().expect_unpoisoned())
+            f(&mut *interner.write().expect_unpoisoned())
         } else {
             None
         }
@@ -236,14 +236,14 @@ impl InternerRegistry {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
-            f(&mut **interner.write().expect_unpoisoned())
+            f(&mut *interner.write().expect_unpoisoned())
         } else {
-            f(&mut **self
+            f(&mut *self
                 .interners
                 .write()
                 .expect_unpoisoned()
                 .entry(TypeId::of::<T>())
-                .or_insert_with(|| RwLock::new(Box::new(Interner::<T>::default())))
+                .or_insert_with(|| Box::new(RwLock::new(Interner::<T>::default())))
                 .get_mut()
                 .expect_unpoisoned())
         }
@@ -363,7 +363,7 @@ macro_rules! rename_interner {
     };
 }
 
-type RegistryMap = indexmap::IndexMap<TypeId, RwLock<Box<dyn AnyInterner>>, ahash::RandomState>;
+type RegistryMap = indexmap::IndexMap<TypeId, Box<RwLock<dyn AnyInterner>>, ahash::RandomState>;
 
 trait LockResultExt {
     type Output;
