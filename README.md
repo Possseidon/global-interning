@@ -1,12 +1,12 @@
 # global-interning
 
-A Rust library for [interning] any value as long as it implements [`Eq`](Eq) and [`Hash`](Hash).
+A Rust library for [interning] any value as long as it implements [`Eq`][Eq] and [`Hash`][Hash].
 
 Main goals:
 
 - Reduce memory usage by eliminating duplicate values
-- Cheap [`Eq`](Eq) and [`Hash`](Hash) of already `Interned` values
-- Support unsized types including [`Interned<str>`](str) and [`Interned<[T]>`](slice)
+- Cheap [`Eq`][Eq] and [`Hash`][Hash] of already `Interned` values
+- Support unsized types including [`Interned<str>`][str] and [`Interned<[T]>`][slice]
 - Global sharing across all threads
 - `Arc`-based handle type
 
