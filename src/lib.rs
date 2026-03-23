@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod interned;
 mod interner;
 mod registry;
