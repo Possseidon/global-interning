@@ -65,7 +65,7 @@ impl<T: ?Sized> Clone for Interned<T> {
     }
 }
 
-/// Hide from [`fmt::Debug`] as is the case with other smart-pointers like [`Box`] and [`Arc`].
+/// Hidden from [`fmt::Debug`] as is the case with other smart-pointers like [`Box`] and [`Arc`].
 impl<T: ?Sized + fmt::Debug> fmt::Debug for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)

@@ -1,20 +1,19 @@
 use std::{any::type_name, borrow::Cow, sync::Arc};
 
-use crate::{AnyInterner, Intern};
+use crate::{Intern, Interner};
 
-/// Required for types to be interned with [`crate::Interned::from_ref`].
+/// Required for types to be interned with [`Interned::from_ref`](crate::Interned::from_ref).
 ///
-/// It has a blanket implementation over all [`Sized`] types that are [`Clone`].
+/// - Has a blanket implementation over all [`Sized`] types that are [`Clone`].
+/// - Also implemented for most unsized [`std`] types such as [`str`] and slices.
 ///
-/// It is also implemented for most `?Sized` [`std`] types such as [`str`] and slices.
-///
-/// A blanket implementation over `Box<T>: From<&T>` would work for most `?Sized` types but not for
-/// sized ones.
+/// A blanket implementation over `Box<T>: From<&T>` would work for most unsized types but not for
+/// [`Sized`] ones.
 #[diagnostic::on_unimplemented(
     message = "unable to intern `{Self}` from a reference",
     note = "`Sized` types must implement `Clone` to be internable from a reference",
     note = "use an owned value via `Interned::from_owned` if `{Self}` cannot be `Clone`",
-    note = "`?Sized` types must implement `InternRef` manually"
+    note = "unsized types must implement `InternRef` manually"
 )]
 pub trait InternRef: Intern {
     fn intern_ref(&self) -> Box<Self>;
@@ -56,13 +55,13 @@ impl InternRef for std::ffi::CStr {
     }
 }
 
-pub(crate) struct Interner<T: ?Sized> {
+pub(crate) struct TypedInterner<T: ?Sized> {
     /// [`Arc`] instead of [`crate::Interned<T>`] since it has different [`Eq`] semantics.
     values: ahash::HashSet<Arc<T>>,
     name: Cow<'static, str>,
 }
 
-impl<T: ?Sized> Default for Interner<T> {
+impl<T: ?Sized> Default for TypedInterner<T> {
     fn default() -> Self {
         Self {
             values: Default::default(),
@@ -71,7 +70,7 @@ impl<T: ?Sized> Default for Interner<T> {
     }
 }
 
-impl<T: ?Sized + Intern> AnyInterner for Interner<T> {
+impl<T: ?Sized + Intern> Interner for TypedInterner<T> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -137,7 +136,7 @@ impl<T: ?Sized + Intern> AnyInterner for Interner<T> {
     }
 }
 
-impl<T: ?Sized + Intern> Interner<T> {
+impl<T: ?Sized + Intern> TypedInterner<T> {
     pub(crate) fn get(&self, value: &T) -> Option<Arc<T>> {
         self.values.get(value).cloned()
     }
@@ -154,7 +153,7 @@ impl<T: ?Sized + Intern> Interner<T> {
     }
 }
 
-impl<T: ?Sized> Interner<T> {
+impl<T: ?Sized> TypedInterner<T> {
     fn original_name() -> &'static str {
         type_name::<T>()
     }

@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, LazyLock, LockResult, RwLock},
 };
 
-use crate::{Intern, Interner};
+use crate::{Intern, TypedInterner};
 
 /// Holds all interners and their interned values.
 pub static INTERNERS: InternerRegistry = InternerRegistry {
@@ -63,7 +63,7 @@ impl InternerRegistry {
     /// Keep in mind that it might still be beneficial to keep empty interners around for their
     /// already allocated capacity.
     ///
-    /// If a removed interner was renamed via [`AnyInterner::name_mut`] then its name is forgotten
+    /// If a removed interner was renamed via [`Interner::name_mut`] then its name is forgotten
     /// with it.
     pub fn remove_empty(&self) {
         self.retain_empty(|_| false)
@@ -81,7 +81,7 @@ impl InternerRegistry {
     /// # Locking
     ///
     /// Any interning operation within `f` will lead to a deadlock due to the global write-lock.
-    pub fn retain_empty(&self, mut f: impl FnMut(&mut dyn AnyInterner) -> bool) {
+    pub fn retain_empty(&self, mut f: impl FnMut(&mut dyn Interner) -> bool) {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners.write().expect_unpoisoned().retain(|_, interner| {
                 let interner = interner.get_mut().expect_unpoisoned();
@@ -97,7 +97,7 @@ impl InternerRegistry {
     /// # Locking
     ///
     /// Any interning operation within `f` may lead to a deadlock.
-    pub fn for_each(&self, mut f: impl FnMut(&dyn AnyInterner)) {
+    pub fn for_each(&self, mut f: impl FnMut(&dyn Interner)) {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners
                 .read()
@@ -110,7 +110,7 @@ impl InternerRegistry {
 
     /// Calls `f` for all registered interners in reverse insertion order.
     ///
-    /// This order was chosen with [`AnyInterner::cleanup`] in mind. A nested structure of different
+    /// This order was chosen with [`Interner::cleanup`] in mind. A nested structure of different
     /// interned types has to clean up the outermost types first since the inner ones are
     /// technically still referenced by the existing outer but unreferenced values.
     ///
@@ -123,7 +123,7 @@ impl InternerRegistry {
     /// # Locking
     ///
     /// Any interning operation within `f` may lead to a deadlock.
-    pub fn for_each_mut(&self, mut f: impl FnMut(&mut dyn AnyInterner)) {
+    pub fn for_each_mut(&self, mut f: impl FnMut(&mut dyn Interner)) {
         if let Some(interners) = LazyLock::get(&self.interners) {
             interners
                 .read()
@@ -191,7 +191,7 @@ impl InternerRegistry {
     /// Any interning operation within `f` may lead to a deadlock.
     pub fn get<T: ?Sized + Intern, R>(
         &self,
-        f: impl FnOnce(&dyn AnyInterner) -> Option<R>,
+        f: impl FnOnce(&dyn Interner) -> Option<R>,
     ) -> Option<R> {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
@@ -211,7 +211,7 @@ impl InternerRegistry {
     /// Any interning operation within `f` may lead to a deadlock.
     pub fn get_mut<T: ?Sized + Intern, R>(
         &self,
-        f: impl FnOnce(&mut dyn AnyInterner) -> Option<R>,
+        f: impl FnOnce(&mut dyn Interner) -> Option<R>,
     ) -> Option<R> {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
@@ -229,10 +229,7 @@ impl InternerRegistry {
     /// # Locking
     ///
     /// Any interning operation within `f` may lead to a deadlock.
-    pub fn get_or_init<T: ?Sized + Intern, R>(
-        &self,
-        f: impl FnOnce(&mut dyn AnyInterner) -> R,
-    ) -> R {
+    pub fn get_or_init<T: ?Sized + Intern, R>(&self, f: impl FnOnce(&mut dyn Interner) -> R) -> R {
         if let Some(interners) = LazyLock::get(&self.interners)
             && let Some(interner) = interners.read().expect_unpoisoned().get(&TypeId::of::<T>())
         {
@@ -243,13 +240,13 @@ impl InternerRegistry {
                 .write()
                 .expect_unpoisoned()
                 .entry(TypeId::of::<T>())
-                .or_insert_with(|| Box::new(RwLock::new(Interner::<T>::default())))
+                .or_insert_with(|| Box::new(RwLock::new(TypedInterner::<T>::default())))
                 .get_mut()
                 .expect_unpoisoned())
         }
     }
 
-    /// Renames the interner for `T` via [`AnyInterner::name_mut`] and returns the old name.
+    /// Renames the interner for `T` via [`Interner::name_mut`] and returns the old name.
     ///
     /// The interner is created if it doesn't exist yet. Be careful to not remove it via e.g.
     /// [`Self::remove_empty`] since that also removes its name.
@@ -277,7 +274,7 @@ impl InternerRegistry {
 }
 
 /// A type-erased interner.
-pub trait AnyInterner: Any + Send + Sync {
+pub trait Interner: Any + Send + Sync {
     /// The name of the interned type.
     ///
     /// This should ideally only be used to give a user a way to distinguish interners at runtime.
@@ -347,18 +344,18 @@ pub trait AnyInterner: Any + Send + Sync {
     fn reserve(&mut self, additional: usize);
 }
 
-impl dyn AnyInterner {
+impl dyn Interner {
     /// Downcasts and [`Interner::get`]s the given `value`.
-    fn downcast_ref<T: ?Sized + Intern>(&self) -> &Interner<T> {
+    fn downcast_ref<T: ?Sized + Intern>(&self) -> &TypedInterner<T> {
         (self as &dyn Any)
-            .downcast_ref::<Interner<_>>()
+            .downcast_ref::<TypedInterner<_>>()
             .expect("interner should have to correct type")
     }
 
     /// Downcasts and [`Interner::intern`]s the given `value`.
-    fn downcast_mut<T: ?Sized + Intern>(&mut self) -> &mut Interner<T> {
+    fn downcast_mut<T: ?Sized + Intern>(&mut self) -> &mut TypedInterner<T> {
         (self as &mut dyn Any)
-            .downcast_mut::<Interner<_>>()
+            .downcast_mut::<TypedInterner<_>>()
             .expect("interner should have to correct type")
     }
 }
@@ -373,7 +370,7 @@ macro_rules! rename_interner {
     };
 }
 
-type RegistryMap = indexmap::IndexMap<TypeId, Box<RwLock<dyn AnyInterner>>, ahash::RandomState>;
+type RegistryMap = indexmap::IndexMap<TypeId, Box<RwLock<dyn Interner>>, ahash::RandomState>;
 
 trait LockResultExt {
     type Output;

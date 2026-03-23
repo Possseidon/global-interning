@@ -8,5 +8,5 @@ mod serde;
 
 pub use interned::{Intern, Interned};
 pub use interner::InternRef;
-pub(crate) use interner::Interner;
-pub use registry::{AnyInterner, INTERNERS, InternerRegistry};
+pub(crate) use interner::TypedInterner;
+pub use registry::{INTERNERS, Interner, InternerRegistry};
