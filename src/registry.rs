@@ -282,7 +282,7 @@ pub trait AnyInterner: Any + Send + Sync {
     ///
     /// This should ideally only be used to give a user a way to distinguish interners at runtime.
     ///
-    /// Defaults to [`std::any::type_name`] but can be changed with [`Self::name_mut`].
+    /// Defaults to [`Self::original_name`] but can be changed with [`Self::name_mut`].
     fn name(&self) -> &str;
 
     /// Mutable access to [`Self::name`].
@@ -290,6 +290,16 @@ pub trait AnyInterner: Any + Send + Sync {
     /// This can be used to provide better (e.g. less verbose) type names to show to the user or
     /// even let the user rename them manually; ideally in a persisted way.
     fn name_mut(&mut self) -> &mut Cow<'static, str>;
+
+    /// The [`Self::name`] that is used by default which uses [`std::any::type_name`].
+    ///
+    /// Can be used to reset the name back to its original value.
+    fn original_name(&self) -> &'static str;
+
+    /// Resets [`Self::name`] to [`Self::original_name`].
+    fn reset_name(&mut self) {
+        *self.name_mut() = self.original_name().into();
+    }
 
     /// The number of interned values, including values that are no longer used.
     fn len(&self) -> usize;

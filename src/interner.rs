@@ -66,7 +66,7 @@ impl<T: ?Sized> Default for Interner<T> {
     fn default() -> Self {
         Self {
             values: Default::default(),
-            name: type_name::<T>().into(),
+            name: Self::original_name().into(),
         }
     }
 }
@@ -78,6 +78,10 @@ impl<T: ?Sized + Intern> AnyInterner for Interner<T> {
 
     fn name_mut(&mut self) -> &mut Cow<'static, str> {
         &mut self.name
+    }
+
+    fn original_name(&self) -> &'static str {
+        Self::original_name()
     }
 
     fn len(&self) -> usize {
@@ -147,6 +151,12 @@ impl<T: ?Sized + Intern> Interner<T> {
                 .expect("value should already be interned")
                 .clone()
         }
+    }
+}
+
+impl<T: ?Sized> Interner<T> {
+    fn original_name() -> &'static str {
+        type_name::<T>()
     }
 
     fn is_unused(value: &Arc<T>) -> bool {
