@@ -6,7 +6,7 @@ mod registry;
 #[cfg(feature = "serde")]
 mod serde;
 
-pub use interned::{Intern, Interned};
+pub use interned::{Intern, Interned, Weak};
 pub use interner::InternRef;
 pub(crate) use interner::TypedInterner;
 pub use registry::{INTERNERS, Interner, InternerRegistry};

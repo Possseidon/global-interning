@@ -5,6 +5,7 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     ops::Deref,
+    ptr,
     sync::Arc,
 };
 
@@ -53,8 +54,8 @@ impl<T: ?Sized + Hash + Eq + Send + Sync + 'static> Intern for T {}
 /// sharing values. Interners currently hold strong [`Arc`]s and detect unused values by checking
 /// for a ref-count of 1. Shared values across different interners would thus inhibit their cleanup.
 ///
-/// Having the interners use [`std::sync::Weak`] would solve this issue but comes with a whole set
-/// of new problems. It is still something to maybe look into in the future. It would also allow for
+/// Having the interners use [`Weak`] would solve this issue but comes with a whole set of new
+/// problems. It is still something to maybe look into in the future. It would also allow for
 /// immediate cleanup (minus removing dead elements) although that can also be seen as a downside
 /// since it can make sense to reuse values even if they are momentarily unused.
 pub struct Interned<T: ?Sized>(Arc<T>);
@@ -129,6 +130,12 @@ impl<T: ?Sized> Hash for Interned<T> {
 impl<T: ?Sized> PartialEq for Interned<T> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T: ?Sized> PartialEq<Weak<T>> for Interned<T> {
+    fn eq(&self, other: &Weak<T>) -> bool {
+        ptr::addr_eq(Arc::as_ptr(&self.0), other.0.as_ptr())
     }
 }
 
@@ -323,5 +330,63 @@ impl<T: Intern> Interned<[T]> {
                 .get_value::<[_]>(&value)
                 .unwrap_or_else(|| INTERNERS.intern::<[_]>(value.into())),
         )
+    }
+}
+
+impl<T: ?Sized> Interned<T> {
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        Weak(Arc::downgrade(&this.0))
+    }
+}
+
+pub struct Weak<T: ?Sized>(std::sync::Weak<T>);
+
+impl<T: ?Sized> Clone for Weak<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for Weak<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T> Default for Weak<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: ?Sized> Hash for Weak<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
+
+impl<T: ?Sized> PartialEq for Weak<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+impl<T: ?Sized> PartialEq<Interned<T>> for Weak<T> {
+    fn eq(&self, other: &Interned<T>) -> bool {
+        other == self
+    }
+}
+
+impl<T: ?Sized> Eq for Weak<T> {}
+
+impl<T> Weak<T> {
+    pub const fn new() -> Self {
+        Self(std::sync::Weak::new())
+    }
+}
+
+impl<T: ?Sized> Weak<T> {
+    pub fn upgrade(&self) -> Option<Interned<T>> {
+        self.0.upgrade().map(Interned)
     }
 }
