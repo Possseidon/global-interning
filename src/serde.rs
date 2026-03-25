@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Intern, Interned};
 
-impl<T: ?Sized + Serialize> Serialize for Interned<T> {
+impl<T: ?Sized + Intern + Serialize> Serialize for Interned<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

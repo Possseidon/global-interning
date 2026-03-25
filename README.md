@@ -9,6 +9,7 @@ Main goals:
 - Support unsized types including [`Interned<str>`][str] and [`Interned<[T]>`][slice]
 - Global sharing across all threads
 - `Arc`-based handle type
+- Automatic deinterning of values once they are no longer used
 
 [interning]: https://en.wikipedia.org/wiki/Interning_(computer_science)
 [Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html

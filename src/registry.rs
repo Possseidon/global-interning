@@ -134,54 +134,6 @@ impl InternerRegistry {
         }
     }
 
-    /// Cleans up all unused values across all interners.
-    ///
-    /// Returns the total number of removed values as well as the number of passes it took to clean
-    /// everything up. Both saturate at [`usize::MAX`].
-    ///
-    /// The number of passes includes the final pass in which no more values could be cleaned up.
-    /// Returns `0` passes if no interners are registered yet.
-    ///
-    /// This intentionally does **not** fully remove interners themselves even if they end up empty.
-    /// [`Self::remove_empty`] can be called afterwards manually but remember that this will drop
-    /// capacity and cause renamed interners to lose their name.
-    ///
-    /// # Locking
-    ///
-    /// This takes a write-lock on the entire registry even though a read-lock would technically
-    /// suffice to ensure that this function is guaranteed to finish eventually. Without this
-    /// exclusivity another thread could repeatedly create new unused values faster than they
-    /// can be cleaned up.
-    pub fn cleanup_all(&self) -> (usize, usize) {
-        let Some(interners) = LazyLock::get(&self.interners) else {
-            return (0, 0);
-        };
-
-        // a read-lock would suffice but a write-lock guarantees a finite number of passes
-        let mut interners = interners.write().expect_unpoisoned();
-        if interners.is_empty() {
-            return (0, 0);
-        }
-
-        let mut total = 0_usize;
-        let mut passes = 1_usize; // need to do at least one pass
-
-        while interners
-            .values_mut()
-            .rev() // see Self::for_each_mut for why rev
-            .fold(false, |any_cleaned_up, interner| {
-                // .fold() instead of .any() to always do a full pass
-                let cleaned_up = interner.get_mut().expect_unpoisoned().cleanup();
-                total = total.saturating_add(cleaned_up);
-                any_cleaned_up || cleaned_up > 0
-            })
-        {
-            passes = passes.saturating_add(1); // need an extra pass
-        }
-
-        (total, passes)
-    }
-
     /// Calls `f` with the interner for `T` if it exists and forwards its result `R`.
     ///
     /// Returns [`None`] if `T` doesn't have an interner.
@@ -271,6 +223,22 @@ impl InternerRegistry {
     pub(crate) fn intern<T: ?Sized + Intern>(&self, value: Arc<T>) -> Arc<T> {
         self.get_or_init::<T, _>(|interner| interner.downcast_mut().intern(value))
     }
+
+    /// Checks if `value` is the last reference and, if so, removes it from the interner.
+    ///
+    /// If it was indeed the last reference, then it is dropped after the write-lock is released.
+    /// This is necessary to prevent deadlocks but does mean, that there is a brief moment where the
+    /// [`Arc`] has [`Arc::strong_count`] of 1. [`crate::Weak`] makes sure to not upgrade if the
+    /// strong_count is 1.
+    ///
+    /// If it was not the last reference, then it instead dropped *while* holding the lock to ensure
+    /// the [`Arc::strong_count`] is decremented in a way that ensures that the next dropped [`Arc`]
+    /// is guaranteed to see the updated [`Arc::strong_count`].
+    pub(crate) fn drop_value<T: ?Sized + Intern>(&self, value: Arc<T>) {
+        // Return the Arc from get_mut so it gets dropped *after* the lock is released.
+        self.get_mut::<T, _>(|interner| Some(interner.downcast_mut().drop_value(value)))
+            .expect("interner should exist");
+    }
 }
 
 /// A type-erased interner.
@@ -306,28 +274,16 @@ pub trait Interner: Any + Send + Sync {
 
     /// The total number of [`Interned<T>`] that are duplicates.
     ///
+    /// Only counts duplicates at the root level; any nested [`Interned<T>`] are not counted if they
+    /// are already accounted for by their parent.
+    ///
     /// A low number may indicate that interning hurts more than it helps.
     ///
     /// This should only be seen as an estimate since duplicate [`Interned<T>`]s can be cloned and
     /// dropped at any time from other threads.
     ///
     /// [`Interned<T>`]: crate::Interned
-    fn sum_duplicates(&self) -> usize;
-
-    /// Counts the number of unused values which could be removed via [`Self::cleanup`].
-    ///
-    /// - `&mut self` guarantees consecutive calls never returning less than a previous call
-    /// - `&self` does not guarantee this
-    fn count_unused(&self) -> usize;
-
-    /// Checks if any values are unused and could be removed via [`Self::cleanup`].
-    ///
-    /// - `&mut self` guarantees consecutive calls never going from `true` to `false`
-    /// - `&self` does not guarantee this
-    fn any_unused(&self) -> bool;
-
-    /// Removes any unused values and returns the number of removed values.
-    fn cleanup(&mut self) -> usize;
+    fn sum_root_duplicates(&self) -> usize;
 
     /// Returns the number of values that can be interned without reallocating.
     ///

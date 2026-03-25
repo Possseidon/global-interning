@@ -91,32 +91,12 @@ impl<T: ?Sized + Intern> Interner for TypedInterner<T> {
         self.values.is_empty()
     }
 
-    fn sum_duplicates(&self) -> usize {
+    fn sum_root_duplicates(&self) -> usize {
         self.values
             .iter()
             // 2 references are not yet considered a "duplicate"
             .map(|value| Arc::strong_count(value).saturating_sub(2))
             .sum()
-    }
-
-    fn count_unused(&self) -> usize {
-        self.values
-            .iter()
-            .filter(|value| Self::is_unused(value))
-            .count()
-    }
-
-    fn any_unused(&self) -> bool {
-        self.values.iter().any(Self::is_unused)
-    }
-
-    fn cleanup(&mut self) -> usize {
-        let count = self.len();
-        // having exclusive access via &mut self ensure that if this is the only reference then
-        // nobody else could create a new reference by cloning the Arc during this function
-        self.values.retain(|value| !Self::is_unused(value));
-        // the above also means len can never increase so the following cannot overflow
-        count - self.len()
     }
 
     fn capacity(&self) -> usize {
@@ -151,14 +131,26 @@ impl<T: ?Sized + Intern> TypedInterner<T> {
                 .clone()
         }
     }
+
+    pub(crate) fn drop_value(&mut self, value: Arc<T>) -> Option<Arc<T>> {
+        match Arc::strong_count(&value) {
+            ..=1_usize => panic!("interned value should have at least 2 references"),
+            2 => {
+                assert!(self.values.remove(&value), "value should be interned");
+                // The value is returned back to the caller with a strong_count of 1. It cannot be
+                // dropped here directly since it might have nested interned values of the same type
+                // which themselves also try calling this function resulting in a deadlock.
+                Some(value)
+            }
+            // value is dropped here (by not returning it back) WHILE holding the lock on the
+            // interner to ensure we definitely see the strong_count of 2
+            3.. => None,
+        }
+    }
 }
 
 impl<T: ?Sized> TypedInterner<T> {
     fn original_name() -> &'static str {
         type_name::<T>()
-    }
-
-    fn is_unused(value: &Arc<T>) -> bool {
-        Arc::strong_count(value) == 1
     }
 }

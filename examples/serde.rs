@@ -51,15 +51,10 @@ fn main() {
     println!();
     INTERNERS.for_each_mut(|interner| {
         println!("Interned<{}>", interner.name());
-        println!("  {} distinct value(s) interned", interner.len(),);
+        println!("  {} distinct value(s) interned", interner.len());
         println!(
             "  {} duplicated value(s) avoided in total",
-            interner.sum_duplicates()
+            interner.sum_root_duplicates()
         );
-        println!("  {} value(s) unused", interner.count_unused());
     });
-
-    drop(person);
-    let (total, passes) = INTERNERS.cleanup_all();
-    println!("removed {total} values using {passes} passes");
 }

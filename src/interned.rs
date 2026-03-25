@@ -1,11 +1,12 @@
 use std::{
     array::TryFromSliceError,
     cmp::Ordering,
+    collections::HashMap,
     error::Error,
     fmt,
     hash::{Hash, Hasher},
+    mem::ManuallyDrop,
     ops::Deref,
-    ptr,
     sync::Arc,
 };
 
@@ -13,10 +14,13 @@ use crate::{INTERNERS, InternRef};
 
 /// A trait alias for all types that can be interned.
 ///
+/// It requires all of the following:
+///
 /// - [`Hash`] and [`Eq`] to look up existing values in an internal hashmap
 /// - [`Send`] and [`Sync`] since [`INTERNERS`] is shared globally across all threads
 /// - `'static` since it makes no sense to intern a value with a non-`'static` lifetime
-/// - `?Sized` types such as [`str`] and slices are also supported
+///
+/// `?Sized` types such as [`str`] and slices are also supported.
 pub trait Intern: Hash + Eq + Send + Sync + 'static {}
 impl<T: ?Sized + Hash + Eq + Send + Sync + 'static> Intern for T {}
 
@@ -36,6 +40,10 @@ impl<T: ?Sized + Hash + Eq + Send + Sync + 'static> Intern for T {}
 /// Nesting [`Interned`] values is not only possible but oftentimes even beneficial thanks to the
 /// aforementioned cheap [`Eq`] and [`Hash`].
 ///
+/// # Cleanup
+///
+/// A value is automatically deinterned once all [`Interned<T>`] for that value are dropped.
+///
 /// # Not [`Borrow<T>`]
 ///
 /// [`Interned<T>`] does not implement [`Borrow<T>`] since it uses a different [`Hash`]
@@ -44,48 +52,54 @@ impl<T: ?Sized + Hash + Eq + Send + Sync + 'static> Intern for T {}
 ///
 /// [`Borrow<T>`]: std::borrow::Borrow
 ///
-/// # How do I intern from an existing [`Arc`]?
+/// # Can I interact with the underlying [`Arc`]?
 ///
-/// While it is possible to get the internal [`Arc`] from an [`Interned`] value via [`Deref`], the
-/// opposite - providing your own [`Arc`] to be interned - is **not possible**.
+/// No, you can neither give your own [`Arc`] to be interned, nor can you get back the [`Arc`] from
+/// an existing [`Interned`].
 ///
-/// Reason being that an [`Arc`] can be freely coerced into a different type (e.g. `[T; N]` can be
-/// coerced to `[T]` or the opposite via [`TryFrom`]) which can result in different interners
-/// sharing values. Interners currently hold strong [`Arc`]s and detect unused values by checking
-/// for a ref-count of 1. Shared values across different interners would thus inhibit their cleanup.
+/// This crate relies on having full control over all [`Arc`]s used by [`Interned`] to ensure the
+/// last [`Interned`] getting dropped also deinterning the value. If other references to the
+/// underlying [`Arc`] were to exist in user code they would inhibit this cleanup.
 ///
-/// Having the interners use [`Weak`] would solve this issue but comes with a whole set of new
-/// problems. It is still something to maybe look into in the future. It would also allow for
-/// immediate cleanup (minus removing dead elements) although that can also be seen as a downside
-/// since it can make sense to reuse values even if they are momentarily unused.
-pub struct Interned<T: ?Sized>(Arc<T>);
+/// Another reason for not being able to intern an existing [`Arc`] is the fact that an [`Arc`] can
+/// be freely coerced into a different type (e.g. `[T; N]` can be coerced to `[T]` or the opposite
+/// via [`TryFrom`]) which can result in different interners sharing values. This too would break
+/// cleanup with the current implementation.
+pub struct Interned<T: ?Sized + Intern>(ManuallyDrop<Arc<T>>);
 
-impl<T: ?Sized> Clone for Interned<T> {
+impl<T: ?Sized + Intern> Drop for Interned<T> {
+    fn drop(&mut self) {
+        // SAFETY: self is not used after the Arc has been taken out
+        INTERNERS.drop_value(unsafe { ManuallyDrop::take(&mut self.0) });
+    }
+}
+
+impl<T: ?Sized + Intern> Clone for Interned<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
 /// Hidden from [`fmt::Debug`] as is the case with other smart-pointers like [`Box`] and [`Arc`].
-impl<T: ?Sized + fmt::Debug> fmt::Debug for Interned<T> {
+impl<T: ?Sized + Intern + fmt::Debug> fmt::Debug for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<T: ?Sized + fmt::Display> fmt::Display for Interned<T> {
+impl<T: ?Sized + Intern + fmt::Display> fmt::Display for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<T: ?Sized> fmt::Pointer for Interned<T> {
+impl<T: ?Sized + Intern> fmt::Pointer for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl<T: ?Sized + Error> Error for Interned<T> {
+impl<T: ?Sized + Intern + Error> Error for Interned<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         (**self).source()
     }
@@ -121,29 +135,30 @@ impl Default for Interned<std::ffi::CStr> {
     }
 }
 
-impl<T: ?Sized> Hash for Interned<T> {
+impl<T: ?Sized + Intern> Hash for Interned<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.0).hash(state);
+        // strip metadata, similar to what ptr::addr_eq does
+        let stripped_ptr = Arc::as_ptr(&self.0) as *const ();
+        stripped_ptr.hash(state);
     }
 }
 
-impl<T: ?Sized> PartialEq for Interned<T> {
+impl<T: ?Sized + Intern> PartialEq for Interned<T> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl<T: ?Sized> PartialEq<Weak<T>> for Interned<T> {
+impl<T: ?Sized + Intern> Eq for Interned<T> {}
+
+impl<T: ?Sized + Intern> PartialEq<Weak<T>> for Interned<T> {
     fn eq(&self, other: &Weak<T>) -> bool {
-        ptr::addr_eq(Arc::as_ptr(&self.0), other.0.as_ptr())
+        std::ptr::addr_eq(Arc::as_ptr(&self.0), other.0.as_ptr())
     }
 }
 
-impl<T: ?Sized> Eq for Interned<T> {}
-
-impl<T: ?Sized + PartialOrd> PartialOrd for Interned<T> {
+impl<T: ?Sized + Intern + PartialOrd> PartialOrd for Interned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // should be T: Ord but leaving that trait bound out here simplifies generic derives
         if self == other {
             Some(Ordering::Equal)
         } else {
@@ -154,7 +169,7 @@ impl<T: ?Sized + PartialOrd> PartialOrd for Interned<T> {
     }
 }
 
-impl<T: ?Sized + Ord> Ord for Interned<T> {
+impl<T: ?Sized + Intern + Ord> Ord for Interned<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         if self == other {
             Ordering::Equal
@@ -166,20 +181,20 @@ impl<T: ?Sized + Ord> Ord for Interned<T> {
     }
 }
 
-impl<T: ?Sized> Deref for Interned<T> {
-    type Target = Arc<T>;
+impl<T: ?Sized + Intern> Deref for Interned<T> {
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl<T: ?Sized, Q: ?Sized> AsRef<Q> for Interned<T>
+impl<T: ?Sized + Intern, Q: ?Sized> AsRef<Q> for Interned<T>
 where
-    Arc<T>: AsRef<Q>,
+    T: AsRef<Q>,
 {
     fn as_ref(&self) -> &Q {
-        self.0.as_ref()
+        (**self.0).as_ref()
     }
 }
 
@@ -272,12 +287,37 @@ where
     }
 }
 
+impl<T: ?Sized + Intern> Interned<T> {
+    /// Wraps an [`Arc`] that is assumed to already be interned in [`INTERNERS`] in [`Interned`].
+    fn new(value: Arc<T>) -> Self {
+        Self(ManuallyDrop::new(value))
+    }
+
+    /// Creates a new [`Weak`] reference to this interned value.
+    pub fn downgrade(this: &Self) -> Weak<T> {
+        Weak(Arc::downgrade(&this.0))
+    }
+
+    /// Interns a [`Box`]ed `value` or returns an already interned value.
+    ///
+    /// This is a more flexible option requiring neither [`Sized`] like [`Self::from_owned`] nor
+    /// [`InternRef`] like [`Self::from_ref`] but also less efficient unless you already have a
+    /// [`Box`] anyway.
+    pub fn from_box(value: Box<T>) -> Self {
+        Self::new(
+            INTERNERS
+                .get_value(&*value)
+                .unwrap_or_else(|| INTERNERS.intern(value.into())),
+        )
+    }
+}
+
 impl<T: Intern> Interned<T> {
     /// Interns the given `value` or returns an already interned value.
     ///
     /// The given `value` is dropped if it was already interned.
     pub fn from_owned(value: T) -> Self {
-        Self(
+        Self::new(
             INTERNERS
                 .get_value(&value)
                 .unwrap_or_else(|| INTERNERS.intern(value.into())),
@@ -290,25 +330,10 @@ impl<T: ?Sized + InternRef> Interned<T> {
     ///
     /// Prefer [`Self::from_owned`] if you have an owned value and don't need it anymore.
     pub fn from_ref(value: &T) -> Self {
-        Self(
+        Self::new(
             INTERNERS
                 .get_value(value)
                 .unwrap_or_else(|| INTERNERS.intern(value.intern_ref().into())),
-        )
-    }
-}
-
-impl<T: ?Sized + Intern> Interned<T> {
-    /// Interns a [`Box`]ed `value` or returns an already interned value.
-    ///
-    /// This is a more flexible option requiring neither [`Sized`] like [`Self::from_owned`] nor
-    /// [`InternRef`] like [`Self::from_ref`] but also less efficient unless you already have a
-    /// [`Box`] anyway.
-    pub fn from_box(value: Box<T>) -> Self {
-        Self(
-            INTERNERS
-                .get_value(&*value)
-                .unwrap_or_else(|| INTERNERS.intern(value.into())),
         )
     }
 }
@@ -325,7 +350,7 @@ impl<T: Intern> Interned<[T]> {
     pub fn slice_from_array<const N: usize>(value: [T; N]) -> Self {
         // Turbofish to make 100% sure the value is interned as [T] and **not** as [T; N].
         // Wrapping that in Interned would just unsize the already interned Arc which is wrong!
-        Self(
+        Self::new(
             INTERNERS
                 .get_value::<[_]>(&value)
                 .unwrap_or_else(|| INTERNERS.intern::<[_]>(value.into())),
@@ -333,12 +358,20 @@ impl<T: Intern> Interned<[T]> {
     }
 }
 
-impl<T: ?Sized> Interned<T> {
-    pub fn downgrade(this: &Self) -> Weak<T> {
-        Weak(Arc::downgrade(&this.0))
-    }
-}
-
+/// An [`Interned<T>`] that does not prevent the value from being deinterned.
+///
+/// It implements both [`Eq`] and [`Hash`] but those implementations come with some caveats:
+///
+/// Once there are no more [`Interned<T>`] for a value, all remaining [`Weak<T>`] no longer have any
+/// connection to that original value. They become their own identity, only comparing equal to
+/// [`Weak<T>`] that used to point to the same [`Interned<T>`]. They **does not** compare equal to a
+/// newly created [`Interned<T>`] of the same original value.
+///
+/// While this might make it sound like [`Weak<T>`] shouldn't implement [`Eq`] and [`Hash`] at all,
+/// being able to use [`Weak<T>`] as the key in a [`HashMap`] is quite useful. In fact,
+/// [`WeakMapExt`] provides some extension functions for this exact use-case.
+///
+/// [`HashMap`]: std::collections::HashMap
 pub struct Weak<T: ?Sized>(std::sync::Weak<T>);
 
 impl<T: ?Sized> Clone for Weak<T> {
@@ -361,7 +394,9 @@ impl<T> Default for Weak<T> {
 
 impl<T: ?Sized> Hash for Weak<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_ptr().hash(state);
+        // strip metadata, similar to what ptr::addr_eq does
+        let stripped_ptr = self.0.as_ptr() as *const ();
+        stripped_ptr.hash(state);
     }
 }
 
@@ -371,13 +406,13 @@ impl<T: ?Sized> PartialEq for Weak<T> {
     }
 }
 
-impl<T: ?Sized> PartialEq<Interned<T>> for Weak<T> {
+impl<T: ?Sized> Eq for Weak<T> {}
+
+impl<T: ?Sized + Intern> PartialEq<Interned<T>> for Weak<T> {
     fn eq(&self, other: &Interned<T>) -> bool {
         other == self
     }
 }
-
-impl<T: ?Sized> Eq for Weak<T> {}
 
 impl<T> Weak<T> {
     pub const fn new() -> Self {
@@ -385,8 +420,74 @@ impl<T> Weak<T> {
     }
 }
 
-impl<T: ?Sized> Weak<T> {
+impl<T: ?Sized + Intern> Weak<T> {
+    /// Returns whether the [`Weak`] can no longer be upgraded.
+    ///
+    /// `false` does not guarantee that it is still alive, since by the time of checking it might
+    /// have died already.
+    pub fn dead(&self) -> bool {
+        // strong_count of 1 means the Arc was already deinterned and is about to get dropped.
+        // It can no longer be upgraded in this state.
+        self.0.strong_count() <= 1
+    }
+
     pub fn upgrade(&self) -> Option<Interned<T>> {
-        self.0.upgrade().map(Interned)
+        // check for liveness before taking a lock as an optimization
+        if self.dead() {
+            return None;
+        }
+
+        // TypedInterner::try_deintern has a brief window between getting the strong_count and
+        // removing it from the interner where the strong_count must remain at 2. Taking a lock
+        // before upgrading ensures that this can't happen.
+
+        // If this lock comes before try_deintern then it will be upgraded and prevent the deintern.
+        // If this lock comes right after try_deintern before the Arc is fully dropped then the Arc
+        // will have a strong_count of 1 which must be checked again.
+        INTERNERS
+            .get_mut::<T, _>(|_| {
+                // check for liveness again since try_deintern might have just removed it
+                if self.dead() {
+                    return None;
+                }
+                self.0.upgrade()
+            })
+            .map(Interned::new)
+    }
+}
+
+pub trait WeakMapExt {
+    type Key: ?Sized;
+    type Value;
+
+    fn retain_alive(&mut self);
+    fn retain_alive_and(&mut self, f: impl FnMut(Interned<Self::Key>, &mut Self::Value) -> bool);
+}
+
+impl<K: ?Sized + Intern, V, S> WeakMapExt for HashMap<Weak<K>, V, S> {
+    type Key = K;
+    type Value = V;
+
+    /// Removes any entries with a [`Weak::dead`] key, retaining only alive ones.
+    ///
+    /// It usually makes sense to call this on maps that use [`Weak<T>`] as a key once in a while to
+    /// both reclaim memory for the dead entries and improve the overall performance of the map.
+    fn retain_alive(&mut self) {
+        // implemented manually to skip the upgrade which requires locking
+        self.retain(|key, _| !key.dead());
+    }
+
+    /// Removes any entries which are [`Weak::dead`] or for which `f` returns `false`.
+    ///
+    /// Prefer [`Self::retain_alive`] if `f` always returns `true` since that requires no locking
+    /// (for [`Weak::upgrade`]) and is therefore faster.
+    fn retain_alive_and(&mut self, mut f: impl FnMut(Interned<K>, &mut V) -> bool) {
+        self.retain(|key, value| {
+            if let Some(key) = key.upgrade() {
+                f(key, value)
+            } else {
+                false
+            }
+        });
     }
 }
