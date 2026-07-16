@@ -90,9 +90,7 @@ impl InternerRegistry {
         }
     }
 
-    /// Calls `f` for all registered interners in reverse insertion order.
-    ///
-    /// This order was chosen for consistency with [`Self::for_each_mut`] which has its own reason.
+    /// Calls `f` for all registered interners in insertion order.
     ///
     /// # Locking
     ///
@@ -103,22 +101,11 @@ impl InternerRegistry {
                 .read()
                 .expect_unpoisoned()
                 .values()
-                .rev()
                 .for_each(|interner| f(&*interner.read().expect_unpoisoned()));
         }
     }
 
-    /// Calls `f` for all registered interners in reverse insertion order.
-    ///
-    /// This order was chosen with [`Interner::cleanup`] in mind. A nested structure of different
-    /// interned types has to clean up the outermost types first since the inner ones are
-    /// technically still referenced by the existing outer but unreferenced values.
-    ///
-    /// When such a structure is created, the inner values are usually created first. Unfortunately
-    /// this is not always the case since nested values may be optional.
-    ///
-    /// TL;DR a single [`Self::for_each_mut`] may not necessarily result in a full cleanup but
-    /// reverse order helps for the common case.
+    /// Calls `f` for all registered interners in insertion order.
     ///
     /// # Locking
     ///
@@ -129,7 +116,6 @@ impl InternerRegistry {
                 .read()
                 .expect_unpoisoned()
                 .values()
-                .rev()
                 .for_each(|interner| f(&mut *interner.write().expect_unpoisoned()));
         }
     }
@@ -219,7 +205,7 @@ impl InternerRegistry {
     /// If the `value` is already interned then the given `value` is dropped and the already
     /// interned [`Arc`] is returned instead.
     ///
-    /// While not strictly necessary, [`Self::get`] should be called first as an optimization.
+    /// While not strictly necessary, [`Self::get_value`] should be called first as an optimization.
     pub(crate) fn intern<T: ?Sized + Intern>(&self, value: Arc<T>) -> Arc<T> {
         self.get_or_init::<T, _>(|interner| interner.downcast_mut().intern(value))
     }

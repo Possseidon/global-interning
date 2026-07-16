@@ -364,7 +364,7 @@ impl<T: Intern> Interned<[T]> {
 ///
 /// Once there are no more [`Interned<T>`] for a value, all remaining [`Weak<T>`] no longer have any
 /// connection to that original value. They become their own identity, only comparing equal to
-/// [`Weak<T>`] that used to point to the same [`Interned<T>`]. They **does not** compare equal to a
+/// [`Weak<T>`] that used to point to the same [`Interned<T>`]. They **do not** compare equal to a
 /// newly created [`Interned<T>`] of the same original value.
 ///
 /// While this might make it sound like [`Weak<T>`] shouldn't implement [`Eq`] and [`Hash`] at all,
