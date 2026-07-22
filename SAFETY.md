@@ -8,9 +8,9 @@ There is one single use of `unsafe`; it is not technically necessary but it shou
 struct Interned<T>(Arc<T>);
 ```
 
-This would work fine as is but: In the current design interners hold a **strong** reference to an `Interned`. This means that the reference count of `Arc` can never drop to zero by itself once interned.
+This would work fine as is but: In the current design interners hold a **strong** reference to an `Interned`. This means that the reference count of the `Arc` can never drop to zero by itself once interned.
 
-But one of the goals of this library was automatic cleanup of values once they are no longer referenced. What do we do? We implement `Drop` for `Interned`:
+But one of the goals of this library is automatic cleanup of values once they are no longer referenced. What do we do? We implement `Drop` for `Interned`:
 
 ```rust
 impl<T> Drop for Interned<T> {
