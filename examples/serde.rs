@@ -1,4 +1,4 @@
-use global_interning::{INTERNERS, Interned};
+use globin::{INTERNERS, Interned};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

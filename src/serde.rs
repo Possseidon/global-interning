@@ -1,4 +1,4 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_core::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{Intern, Interned};
 
