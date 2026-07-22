@@ -83,7 +83,7 @@ impl<T: ?Sized + Intern> Clone for Interned<T> {
 /// Hidden from [`fmt::Debug`] as is the case with other smart-pointers like [`Box`] and [`Arc`].
 impl<T: ?Sized + Intern + fmt::Debug> fmt::Debug for Interned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        (*self.0).fmt(f)
     }
 }
 
@@ -101,7 +101,7 @@ impl<T: ?Sized + Intern> fmt::Pointer for Interned<T> {
 
 impl<T: ?Sized + Intern + Error> Error for Interned<T> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        (**self).source()
+        self.0.source()
     }
 }
 
