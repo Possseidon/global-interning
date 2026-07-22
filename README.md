@@ -55,4 +55,4 @@ Check out the documentation for other use-cases.
 
 ## Usage of `unsafe`
 
-This crate contains a single (and easily correctness-provable) `unsafe` block. It is not strictly necessary but should greatly help the optimizer on each access of an interned value. See [SAFETY.md](https://github.com/Possseidon/globin/SAFETY.md) for a detailed explanation.
+This crate contains a single (and easily correctness-provable) `unsafe` block. It is not strictly necessary but should greatly help the optimizer on each access of an interned value. See [SAFETY.md](https://github.com/Possseidon/globin/blob/main/SAFETY.md) for a detailed explanation.
